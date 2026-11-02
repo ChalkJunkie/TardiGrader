@@ -19,7 +19,7 @@ import {
 import { openPrintView, buildSheetPages, buildListPages } from './print.js';
 import { sheetsToDocxBlob } from './docx-export.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 
 /**
  * Weiche Trennstellen für lange Wörter – nur für die Anzeige im Raster, damit
@@ -42,8 +42,8 @@ function displayHyphenate(text) {
 
 const DEFAULT_SETTINGS = {
   weights: { ...DEFAULT_WEIGHTS },
-  scale: 'quarter', // 'quarter' | 'points' | 'both'
-  stepBoth: 'quarter', // Schrittweite beim Nachschärfen, wenn beide Skalen angezeigt werden
+  scale: 'quarter', // Standard für neue Lerngruppen: 'quarter' | 'points' | 'both'
+  stepBoth: 'quarter', // Standard-Schrittweite beim Nachschärfen, wenn beide Skalen angezeigt werden
   nameOrder: 'last-first', // Anzeige in Listen
   theme: 'auto',
   lastBackupAt: null,
@@ -74,6 +74,14 @@ async function loadAll() {
   state.groups = groups.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'de', { numeric: true }));
   state.rounds = rounds;
   state.assessments = new Map(assessments.map((a) => [a.id, a]));
+  // Ab Version 1.1 hat jede Lerngruppe ihre eigene Notenskala. Ältere Gruppen
+  // übernehmen einmalig die bisher zentral eingestellte Skala.
+  const migrate = state.groups.filter((g) => !SCALES.includes(g.scale));
+  for (const g of migrate) {
+    g.scale = state.settings.scale;
+    g.stepBoth = state.settings.stepBoth;
+  }
+  if (migrate.length) await db.batch(migrate.map((g) => ({ store: 'groups', put: g })));
   applyTheme();
 }
 
@@ -102,6 +110,7 @@ function saveAssessment(a) {
 const getGroup = (id) => state.groups.find((g) => g.id === id);
 const roundsOf = (gid) => state.rounds.filter((r) => r.groupId === gid).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 const sortedStudents = (g) => [...(g.students || [])].sort(compareStudents);
+const countLabel = (n) => `${n} ${n === 1 ? 'Schüler:in' : 'Schüler:innen'}`;
 const assessmentId = (roundId, studentId) => `${roundId}:${studentId}`;
 const getAssessment = (roundId, studentId) => state.assessments.get(assessmentId(roundId, studentId)) || null;
 
@@ -144,13 +153,51 @@ function statusOf(a) {
   return ROW_KEYS.some((k) => ev.rows[k] !== null) ? 'partial' : 'open';
 }
 
-function displayScale() {
-  return state.settings.scale;
+const SCALES = ['quarter', 'points', 'both'];
+const SCALE_LABELS = { quarter: 'Viertelnoten', points: 'Notenpunkte', both: 'Viertelnoten und Notenpunkte' };
+
+/** Notenskala einer Lerngruppe (Anzeige und Export). */
+function displayScale(g) {
+  return g && SCALES.includes(g.scale) ? g.scale : state.settings.scale;
 }
 
-function stepScale() {
-  const s = state.settings.scale;
-  return s === 'both' ? state.settings.stepBoth : s;
+/** Schrittweite beim Nachschärfen in dieser Lerngruppe. */
+function stepScale(g) {
+  const s = displayScale(g);
+  if (s !== 'both') return s;
+  return g && (g.stepBoth === 'quarter' || g.stepBoth === 'points') ? g.stepBoth : state.settings.stepBoth;
+}
+
+/**
+ * Auswahl „Notenskala“ (+ Schrittweite bei „Beides“) für ein Objekt mit
+ * den Feldern scale und stepBoth – Lerngruppe oder Einstellungen.
+ */
+function scaleControls(target, onChange) {
+  const box = h('div');
+  function seg(key, options) {
+    const el = h('div', { class: 'seg', role: 'group' });
+    for (const [v, label] of options) {
+      el.append(h('button', { type: 'button', 'aria-pressed': String(target[key] === v), onclick: async () => {
+        target[key] = v;
+        build();
+        if (onChange) await onChange(key, v);
+      } }, label));
+    }
+    return el;
+  }
+  function build() {
+    const parts = [seg('scale', [['quarter', 'Viertelnoten'], ['points', 'Notenpunkte'], ['both', 'Beides']])];
+    if (target.scale === 'both') {
+      parts.push(h('div', { class: 'field', style: { marginTop: '12px', marginBottom: 0 } },
+        h('span', null, 'Nachschärfen in Schritten von'),
+        seg('stepBoth', [['quarter', 'einer Viertelnote'], ['points', 'einem Punkt']])));
+    }
+    box.replaceChildren(...parts);
+  }
+  if (!SCALES.includes(target.scale)) target.scale = state.settings.scale;
+  if (target.stepBoth !== 'quarter' && target.stepBoth !== 'points') target.stepBoth = state.settings.stepBoth;
+  build();
+  return box;
 }
 
 function nameFor(s) {
@@ -253,7 +300,7 @@ function renderHome() {
       list.append(h('a', { class: 'group-item', href: `#/gruppe/${g.id}` },
         h('span', { class: 'group-item__name' }, g.name || 'Ohne Namen'),
         g.klasse ? h('span', { class: 'group-item__klasse' }, g.klasse) : h('span'),
-        h('span', { class: 'group-item__meta' }, `${students.length} Schüler:innen${r ? ` · ${r.title} · ${done} von ${students.length} bewertet` : ''}`),
+        h('span', { class: 'group-item__meta' }, `${countLabel(students.length)}${r ? ` · ${r.title} · ${done} von ${students.length} bewertet` : ''}`),
         h('span', { class: 'progress', 'aria-hidden': 'true' }, h('i', { style: { width: `${pct}%` } }))));
     }
     main.append(h('section', { class: 'section' },
@@ -272,11 +319,13 @@ function renderHome() {
 function newGroupDialog() {
   const name = h('input', { class: 'input', type: 'text', placeholder: 'z. B. Bio 8b', autocomplete: 'off' });
   const klasse = h('input', { class: 'input', type: 'text', placeholder: 'z. B. 8b', autocomplete: 'off' });
+  const choice = { scale: state.settings.scale, stepBoth: state.settings.stepBoth };
   openDialog({
     title: 'Neue Lerngruppe',
     body: [
       h('label', { class: 'field' }, h('span', null, 'Name der Lerngruppe'), name),
       h('label', { class: 'field' }, h('span', null, 'Klasse (erscheint auf dem Schülerbogen)'), klasse),
+      h('div', { class: 'field' }, h('span', null, 'Notenskala'), scaleControls(choice)),
     ],
     actions: [
       { label: 'Abbrechen' },
@@ -290,7 +339,7 @@ function newGroupDialog() {
             toast('Bitte einen Namen eintragen.');
             return false;
           }
-          const g = { id: uid('g'), name: n, klasse: klasse.value.trim(), students: [], createdAt: new Date().toISOString() };
+          const g = { id: uid('g'), name: n, klasse: klasse.value.trim(), scale: choice.scale, stepBoth: choice.stepBoth, students: [], createdAt: new Date().toISOString() };
           await saveGroup(g);
           await createRound(g);
           go(`gruppe/${g.id}/namen`);
@@ -308,6 +357,8 @@ async function createDemoGroup() {
     id: uid('g'),
     name: 'Beispiel Bio 8b',
     klasse: '8b',
+    scale: state.settings.scale,
+    stepBoth: state.settings.stepBoth,
     students: names.map((n) => ({ id: uid('s'), ...splitName(n, 'first-last') })),
     createdAt: new Date().toISOString(),
   };
@@ -387,7 +438,7 @@ async function renderGroup(g) {
   view(topbar({
     back: '#/',
     title: g.name,
-    subtitle: `${g.klasse ? `Klasse ${g.klasse} · ` : ''}${students.length} Schüler:innen`,
+    subtitle: `${g.klasse ? `Klasse ${g.klasse} · ` : ''}${countLabel(students.length)} · ${SCALE_LABELS[displayScale(g)]}`,
     actions: [
       h('a', { class: 'btn', href: `#/gruppe/${g.id}/namen` }, icon('users'), h('span', null, 'Namen')),
       h('a', { class: 'btn btn--primary', href: `#/gruppe/${g.id}/export` }, icon('share'), h('span', null, 'Export')),
@@ -401,7 +452,7 @@ function studentGrid(g, r, students, currentId = null, onPick = null) {
     const a = getAssessment(r.id, s.id);
     const st = statusOf(a);
     const ev = evaluate(a || {});
-    const grade = ev.effective !== null ? describeGrade(ev.effective, displayScale()).short : '–';
+    const grade = ev.effective !== null ? describeGrade(ev.effective, displayScale(g)).short : '–';
     const rowsTxt = a && st !== 'open' ? CRITERIA.map((c) => (ev.rows[c.key] === null ? '–' : formatDecimal(ev.rows[c.key], 2, true))).join(' · ') : 'noch nicht bewertet';
     const label = { done: 'bewertet', partial: 'angefangen', open: 'offen' }[st];
     const item = h(onPick ? 'button' : 'a', {
@@ -462,10 +513,10 @@ function renderGroupEdit(g) {
   const addSingle = async () => {
     const raw = single.value.trim();
     if (!raw) return;
+    single.value = ''; // sofort leeren, damit der nächste Name direkt eingegeben werden kann
+    single.focus();
     const n = splitName(raw, 'first-last');
     const added = await addStudents(g, [n]);
-    single.value = '';
-    single.focus();
     if (added) {
       toast(`${studentName(n)} hinzugefügt.`, { duration: 1500 });
       refreshList();
@@ -526,9 +577,16 @@ function renderGroupEdit(g) {
 
   const main = h('main', { class: 'main' },
     h('section', { class: 'section panel' },
-      h('div', { class: 'map-grid' },
+      h('div', { class: 'map-grid map-grid--wide' },
         h('label', { class: 'field' }, h('span', null, 'Name der Lerngruppe'), nameIn),
-        h('label', { class: 'field' }, h('span', null, 'Klasse (für Schülerbogen und Notenliste)'), klasseIn))),
+        h('label', { class: 'field' }, h('span', null, 'Klasse (für Schülerbogen und Notenliste)'), klasseIn)),
+      h('div', { class: 'field', style: { marginBottom: 0 } },
+        h('span', null, 'Notenskala dieser Lerngruppe (Anzeige, Nachschärfen und Export)'),
+        scaleControls(g, async (key) => {
+          await saveGroup(g);
+          if (key === 'scale') toast(`Notenskala: ${SCALE_LABELS[displayScale(g)]}`, { duration: 1500 });
+        }),
+        h('p', { class: 'muted small', style: { margin: '8px 0 0' } }, 'Ein Wechsel wirkt sofort auf alle Runden dieser Lerngruppe. Nachgeschärfte Endnoten bleiben erhalten und werden in die neue Skala umgerechnet.'))),
     h('section', { class: 'section' }, h('h2', null, 'Namen hinzufügen'), seg, paneBox),
     h('section', { class: 'section' }, h('h2', null, 'Schüler:innen', countEl), listBox),
     h('section', { class: 'section' },
@@ -875,12 +933,12 @@ async function renderRate(g, studentId) {
   const btnWorse = h('button', { class: 'btn', type: 'button', 'aria-label': 'Note verschlechtern' }, '−');
   const btnBetter = h('button', { class: 'btn', type: 'button', 'aria-label': 'Note verbessern' }, '+');
   const btnReset = h('button', { class: 'btn btn--icon', type: 'button', 'aria-label': 'Auf berechneten Wert zurücksetzen', title: 'Auf berechneten Wert zurücksetzen' }, icon('reset'));
-  const step = stepScale();
+  const step = stepScale(g);
   const adjust = (dir) => {
     const ev = evaluate(draft);
     if (ev.proposal === null) return;
     const nv = adjustGrade(ev.effective, step, dir);
-    const same = describeGrade(nv, displayScale()).short === describeGrade(ev.proposal, displayScale()).short;
+    const same = describeGrade(nv, displayScale(g)).short === describeGrade(ev.proposal, displayScale(g)).short;
     draft.final = same ? null : nv;
     draft.finalScale = same ? null : step;
     ensure();
@@ -904,7 +962,7 @@ async function renderRate(g, studentId) {
         v === null ? 'nicht bewertet' : h('span', null, 'Zeilenwert ', h('b', null, formatDecimal(v, 2, true))),
         h('span', null, ` · ${formatDecimal(w * 100, 0)} %`));
     }
-    const sc = displayScale();
+    const sc = displayScale(g);
     if (ev.proposal === null) {
       propBig.textContent = '–';
       propSmall.textContent = 'Zellen antippen';
@@ -1051,14 +1109,14 @@ async function renderExport(g) {
     }
     return true;
   };
-  const sheetsFor = () => chosen().map((s) => buildSheet({ student: s, group: g, assessment: byStudent.get(s.id), scale: displayScale() }));
+  const sheetsFor = () => chosen().map((s) => buildSheet({ student: s, group: g, assessment: byStudent.get(s.id), scale: displayScale(g) }));
   const baseName = safeFileName(`${klasseOf(g) || g.name}_${r.title}`);
-  const scaleName = { quarter: 'Viertelnoten', points: 'Notenpunkten', both: 'Viertelnoten und Notenpunkten' }[displayScale()];
+  const scaleName = { quarter: 'Viertelnoten', points: 'Notenpunkten', both: 'Viertelnoten und Notenpunkten' }[displayScale(g)];
 
   const exportCSV = () => {
     if (!need()) return;
     const list = buildGradeList({ students: chosen(), group: g, assessmentsByStudent: byStudent, nameOrder: 'last-first' });
-    const { header, rows } = gradeListTable(list, displayScale());
+    const { header, rows } = gradeListTable(list, displayScale(g));
     const blob = new Blob([buildCSV(header, rows)], { type: 'text/csv;charset=utf-8' });
     offerFile(blob, `Notenliste_${baseName}.csv`, { title: 'Notenliste (CSV) ist fertig' });
   };
@@ -1072,7 +1130,7 @@ async function renderExport(g) {
       klasse: klasseOf(g),
       round: r.title,
       printed: formatDate(todayISO()),
-      scale: displayScale(),
+      scale: displayScale(g),
       weightsNote: ws.length ? `Gewichtung: ${ws.join(' bzw. ')}` : `Gewichtung: ${weightsText(state.settings.weights)}`,
     });
     openPrintView({ title: `Notenliste ${g.name}`, orientation, pages, onClose: render });
@@ -1126,7 +1184,8 @@ async function renderExport(g) {
           h('button', { class: 'btn', type: 'button', onclick: () => setAll(doneIds) }, 'Nur bewertete'),
           h('button', { class: 'btn', type: 'button', onclick: () => setAll([]) }, 'Keine'))),
       pick),
-    h('p', { class: 'muted small' }, `Noten erscheinen in ${scaleName} (änderbar in den Einstellungen). Runde: ${r.title}.`),
+    h('p', { class: 'muted small' }, `Noten erscheinen in ${scaleName} – einstellbar für diese Lerngruppe unter `,
+      h('a', { href: `#/gruppe/${g.id}/namen` }, 'Namen & Lerngruppe'), `. Runde: ${r.title}.`),
     h('div', { class: 'export-grid' },
       h('section', { class: 'panel export-card' },
         h('h3', null, 'Notenliste'),
@@ -1202,9 +1261,7 @@ function renderSettings() {
     return seg;
   }
 
-  const stepBox = h('div', { class: 'field', style: { marginTop: '12px' } }, h('span', null, 'Nachschärfen in Schritten von'),
-    segSetting('stepBoth', [['quarter', 'einer Viertelnote'], ['points', 'einem Punkt']]));
-  stepBox.hidden = S.scale !== 'both';
+
 
   const backupInfo = S.lastBackupAt ? `Letztes Backup: ${formatDate(todayISO(new Date(S.lastBackupAt)))}` : 'Noch kein Backup erstellt.';
   const backupFile = h('input', { type: 'file', accept: '.json,application/json', class: 'visually-hidden', id: 'backup-file' });
@@ -1229,9 +1286,9 @@ function renderSettings() {
       h('div', { class: 'row', style: { marginTop: '12px' } },
         h('button', { class: 'btn', type: 'button', onclick: () => { ROW_KEYS.forEach((k) => setWeight(k, 1)); } }, 'Je ein Drittel'))),
     h('section', { class: 'section panel' },
-      h('h2', null, 'Notenskala für Anzeige und Export'),
-      segSetting('scale', [['quarter', 'Viertelnoten'], ['points', 'Notenpunkte'], ['both', 'Beides']], (v) => { stepBox.hidden = v !== 'both'; }),
-      stepBox,
+      h('h2', null, 'Notenskala für neue Lerngruppen'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Jede Lerngruppe hat ihre eigene Skala – einstellbar beim Anlegen und unter „Namen & Lerngruppe“. Hier legst du fest, womit neue Lerngruppen starten.'),
+      scaleControls(S, () => saveSettings()),
       h('p', { class: 'muted small' }, 'Viertelnoten: 1 / 1- / 1-2 / 2+ / 2 … Notenpunkte: 17 − 3 × Note, gerundet (15 P ≙ 1+, 14 P ≙ 1, 13 P ≙ 1- …). Exakte Mitten werden zugunsten der Schülerin bzw. des Schülers gerundet.')),
     h('section', { class: 'section panel' },
       h('h2', null, 'Namen in Listen'),
@@ -1258,6 +1315,9 @@ function renderSettings() {
 }
 
 async function exportBackup() {
+  // Zeitpunkt vorher speichern, damit er auch im Backup selbst steht
+  state.settings.lastBackupAt = new Date().toISOString();
+  await saveSettings();
   const data = await db.dumpAll();
   const payload = {
     app: 'TardiGrader',
@@ -1267,8 +1327,6 @@ async function exportBackup() {
     ...data,
   };
   const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
-  state.settings.lastBackupAt = new Date().toISOString();
-  await saveSettings();
   offerFile(blob, `TardiGrader-Backup_${todayISO()}.json`, { title: 'Backup ist fertig' });
 }
 
