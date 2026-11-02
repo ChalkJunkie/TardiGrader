@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="TardiGrader – stilisiertes Bärtierchen">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A45B5"/><stop offset="1" stop-color="#2E2A86"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g transform="translate(-8 -6)">
+  <g id="bear">
+    <!-- Beine (4 Paare, seitlich gesehen 4 sichtbar) -->
+    <g fill="#F5E6EC">
+      <rect x="150" y="286" width="46" height="78" rx="23"/>
+      <rect x="222" y="296" width="46" height="74" rx="23"/>
+      <rect x="294" y="296" width="46" height="74" rx="23"/>
+      <rect x="370" y="278" width="46" height="80" rx="23" transform="rotate(-22 393 318)"/>
+    </g>
+    <!-- Krallen -->
+    <g fill="none" stroke="#F5E6EC" stroke-width="9" stroke-linecap="round">
+      <path d="M160 360 q-10 12 -22 14"/><path d="M173 364 q-4 13 -12 20"/><path d="M186 362 q2 13 -2 22"/>
+      <path d="M232 366 q-10 12 -22 14"/><path d="M245 370 q-4 13 -12 20"/><path d="M258 368 q2 13 -2 22"/>
+      <path d="M304 366 q-10 12 -22 14"/><path d="M317 370 q-4 13 -12 20"/><path d="M330 368 q2 13 -2 22"/>
+      <path d="M414 346 q4 14 16 22"/><path d="M424 338 q10 10 24 12"/><path d="M402 352 q-2 14 4 24"/>
+    </g>
+    <!-- Körper aus überlappenden Segmenten -->
+    <g fill="#F5E6EC">
+      <circle cx="150" cy="262" r="56"/>
+      <circle cx="214" cy="236" r="72"/>
+      <circle cx="290" cy="226" r="78"/>
+      <circle cx="362" cy="240" r="70"/>
+      <circle cx="408" cy="272" r="46"/>
+      <rect x="140" y="246" width="288" height="78" rx="39"/>
+      <!-- Mundröhre -->
+      <rect x="84" y="250" width="58" height="28" rx="14"/>
+    </g>
+    <!-- Segmentfurchen -->
+    <g fill="none" stroke="#C9A9BB" stroke-width="8" stroke-linecap="round">
+      <path d="M246 170 q-12 40 -6 86"/>
+      <path d="M330 162 q-10 44 -4 92"/>
+      <path d="M396 196 q-8 30 -2 62"/>
+    </g>
+    <!-- Mund und Auge -->
+    <circle cx="92" cy="264" r="7" fill="#3E3A9E"/>
+    <circle cx="140" cy="240" r="10" fill="#2A2770"/>
+    <circle cx="143" cy="237" r="3" fill="#F5E6EC"/>
+  </g>
+
+  </g>
+</svg>
