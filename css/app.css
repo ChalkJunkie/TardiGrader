@@ -1078,6 +1078,14 @@ dialog.dlg::backdrop {
   margin-bottom: 10px;
 }
 
+.map-grid--wide {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+
+.field .seg {
+  align-self: flex-start;
+}
+
 /* Drawer (Schnellübersicht im Bewertungsmodus) */
 .quick-list {
   display: grid;
